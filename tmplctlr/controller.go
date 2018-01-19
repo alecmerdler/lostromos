@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	crw "github.com/wpengine/lostromos/crwatcher"
 	"github.com/wpengine/lostromos/metrics"
 	"github.com/wpengine/lostromos/tmpl"
 	"go.uber.org/zap"
@@ -55,14 +56,18 @@ func NewController(tmplDir string, kubeCfg string, logger *zap.SugaredLogger, re
 func (c Controller) ResourceAdded(r *unstructured.Unstructured) {
 	metrics.TotalEvents.Inc()
 	c.logger.Infow("resource added", "resource", r.GetName())
+	c.updateCRStatus(r, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + r.GetName())
+	
 	out, err := c.apply(r)
 	if err != nil {
 		c.logger.Errorw("failed to add resource", "resource", r.GetName(), "error", err, "cmdOutput", out)
 		metrics.CreateFailures.Inc()
+		c.updateCRStatus(r, crw.PhaseFailed, crw.ReasonApplyFailed, err.Error())
 		return
 	}
 	metrics.CreatedReleases.Inc()
 	metrics.ManagedReleases.Inc()
+	c.updateCRStatus(r, crw.PhaseApplied, crw.ReasonApplySuccessful, out)
 }
 
 // ResourceUpdated is called when a custom resource is updated or during a
@@ -70,13 +75,17 @@ func (c Controller) ResourceAdded(r *unstructured.Unstructured) {
 func (c Controller) ResourceUpdated(oldR, newR *unstructured.Unstructured) {
 	metrics.TotalEvents.Inc()
 	c.logger.Infow("resource updated", "resource", newR.GetName())
+	c.updateCRStatus(newR, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource updated: " + newR.GetName())
+
 	out, err := c.apply(newR)
 	if err != nil {
 		c.logger.Errorw("failed to update resource", "resource", newR.GetName(), "error", err, "cmdOutput", out)
 		metrics.UpdateFailures.Inc()
+		c.updateCRStatus(newR, crw.PhaseFailed, crw.ReasonApplyFailed, err.Error())
 		return
 	}
 	metrics.UpdatedReleases.Inc()
+	c.updateCRStatus(newR, crw.PhaseApplied, crw.ReasonApplySuccessful, out)
 }
 
 // ResourceDeleted is called when a custom resource is created and will generate
@@ -120,4 +129,10 @@ func (c Controller) buildTemplate(r *unstructured.Unstructured) (tmpFile *os.Fil
 	}
 	err = tmpl.Parse(cr, c.templatePath, tmpFile)
 	return tmpFile, err
+}
+
+func (c Controller) updateCRStatus(r *unstructured.Unstructured, phase crw.ResourcePhase, reason crw.ConditionReason, message string) (*unstructured.Unstructured, error) {
+	updatedResource := r.DeepCopy()
+	updatedResource.Object["status"] = crw.SetPhase(crw.StatusFor(r), phase, reason, message)
+	return c.resourceClient.Update(updatedResource)
 }

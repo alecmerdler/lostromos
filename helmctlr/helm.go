@@ -19,6 +19,7 @@ import (
 
 	"github.com/ghodss/yaml"
 	"github.com/wpengine/lostromos/metrics"
+	crw "github.com/wpengine/lostromos/crwatcher"
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
@@ -71,13 +72,18 @@ func NewController(chartDir, ns, rn, host string, wait bool, waitto int64, logge
 func (c Controller) ResourceAdded(r *unstructured.Unstructured) {
 	metrics.TotalEvents.Inc()
 	c.logger.Infow("resource added", "resource", r.GetName())
-	if err := c.installOrUpdate(r); err != nil {
+	c.updateCRStatus(r, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + r.GetName())
+
+	resp, err := c.installOrUpdate(r)
+	if err != nil {
 		metrics.CreateFailures.Inc()
 		c.logger.Errorw("failed to create resource", "error", err, "resource", r.GetName())
+		c.updateCRStatus(r, crw.PhaseFailed, crw.ReasonApplyFailed, err.Error())
 		return
 	}
 	metrics.CreatedReleases.Inc()
 	metrics.ManagedReleases.Inc()
+	c.updateCRStatus(r, crw.PhaseApplied, crw.ReasonApplySuccessful, resp)
 }
 
 // ResourceDeleted is called when a custom resource is created and will use
@@ -101,12 +107,17 @@ func (c Controller) ResourceDeleted(r *unstructured.Unstructured) {
 func (c Controller) ResourceUpdated(oldR, newR *unstructured.Unstructured) {
 	metrics.TotalEvents.Inc()
 	c.logger.Infow("resource updated", "resource", newR.GetName())
-	if err := c.installOrUpdate(newR); err != nil {
+	c.updateCRStatus(newR, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource updated: " + newR.GetName())
+
+	resp, err := c.installOrUpdate(newR)
+	if err != nil {
 		metrics.UpdateFailures.Inc()
 		c.logger.Errorw("failed to update resource", "error", err, "resource", newR.GetName())
+		c.updateCRStatus(newR, crw.PhaseFailed, crw.ReasonApplyFailed, err.Error())
 		return
 	}
 	metrics.UpdatedReleases.Inc()
+	c.updateCRStatus(newR, crw.PhaseApplied, crw.ReasonApplySuccessful, resp)
 }
 
 func (c Controller) delete(r *unstructured.Unstructured) error {
@@ -115,30 +126,30 @@ func (c Controller) delete(r *unstructured.Unstructured) error {
 	return err
 }
 
-func (c Controller) installOrUpdate(r *unstructured.Unstructured) error {
+func (c Controller) installOrUpdate(r *unstructured.Unstructured) (string, error) {
 	cr, err := c.marshallCR(r)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	rlsName := c.releaseName(r)
 	if c.releaseExists(rlsName) {
-		_, err = c.Helm.UpdateRelease(
+		resp, err := c.Helm.UpdateRelease(
 			rlsName,
 			c.ChartDir,
 			helm.UpdateValueOverrides(cr),
 			helm.UpgradeWait(c.Wait),
 			helm.UpgradeTimeout(c.WaitTimeout))
-		return err
+		return resp.String(), err
 	}
-	_, err = c.Helm.InstallRelease(
+	resp, err := c.Helm.InstallRelease(
 		c.ChartDir,
 		c.Namespace,
 		helm.ReleaseName(rlsName),
 		helm.ValueOverrides(cr),
 		helm.InstallWait(c.Wait),
 		helm.InstallTimeout(c.WaitTimeout))
-	return err
+	return resp.String(), err
 }
 
 func (c Controller) marshallCR(r *unstructured.Unstructured) ([]byte, error) {
@@ -180,4 +191,10 @@ func (c Controller) releaseExists(rlsName string) bool {
 
 func (c Controller) releaseName(r *unstructured.Unstructured) string {
 	return fmt.Sprintf("%s-%s", c.ReleaseName, r.GetName())
+}
+
+func (c Controller) updateCRStatus(r *unstructured.Unstructured, phase crw.ResourcePhase, reason crw.ConditionReason, message string) (*unstructured.Unstructured, error) {
+	updatedResource := r.DeepCopy()
+	updatedResource.Object["status"] = crw.SetPhase(crw.StatusFor(r), phase, reason, message)
+	return c.resourceClient.Update(updatedResource)
 }

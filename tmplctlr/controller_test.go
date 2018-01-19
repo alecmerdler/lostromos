@@ -26,25 +26,15 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	crw "github.com/wpengine/lostromos/crwatcher"
 	"github.com/wpengine/lostromos/metrics"
+	k8sMock "github.com/wpengine/lostromos/mock/client-go/dynamic"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"github.com/wpengine/lostromos/tmplctlr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 var (
-	testResource = &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"metadata": map[string]interface{}{
-				"name": "dory",
-			},
-			"spec": map[string]interface{}{
-				"Name": "Dory",
-				"From": "Finding Nemo",
-				"By":   "Disney",
-			},
-		},
-	}
-
 	testTemplates = []testFile{
 		// T0.tmpl is a plain template file that just invokes T1.
 		{"0_base.tmpl", `--- {{template "file1.tmpl" . }}`},
@@ -148,14 +138,21 @@ func assertCounters(t *testing.T, c counterTest, f func()) {
 
 func TestResourceAddedHappyPath(t *testing.T) {
 	dir := createTestDir(testTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
 
+	expectedResource := testResource()
+	expectedResource.Object["status"] = testStatusRaw(crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = testStatusRaw(crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 	mockKube.EXPECT().Apply(gomock.Any())
 
 	ct := counterTest{
@@ -164,20 +161,27 @@ func TestResourceAddedHappyPath(t *testing.T) {
 		releases: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceAdded(testResource)
+		c.ResourceAdded(testResource())
 	})
 }
 
 func TestResourceAddedApplyFails(t *testing.T) {
 	dir := createTestDir(testTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
 
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 	mockKube.EXPECT().Apply(gomock.Any()).Return("", errors.New("apply failed"))
 
 	ct := counterTest{
@@ -185,37 +189,46 @@ func TestResourceAddedApplyFails(t *testing.T) {
 		createErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceAdded(testResource)
+		c.ResourceAdded(testResource())
 	})
 }
 
 func TestResourceAddedTemplatingFails(t *testing.T) {
 	dir := createTestDir(testBadTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 
 	ct := counterTest{
 		events:    1,
 		createErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceAdded(testResource)
+		c.ResourceAdded(testResource())
 	})
 }
 
 func TestResourceDeletedHappyPath(t *testing.T) {
 	dir := createTestDir(testTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
 
 	mockKube.EXPECT().Delete(gomock.Any())
@@ -226,18 +239,19 @@ func TestResourceDeletedHappyPath(t *testing.T) {
 		releases: -1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceDeleted(testResource)
+		c.ResourceDeleted(testResource())
 	})
 }
 
 func TestResourceDeletedApplyFails(t *testing.T) {
 	dir := createTestDir(testTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
 
 	mockKube.EXPECT().Delete(gomock.Any()).Return("", errors.New("apply failed"))
@@ -247,7 +261,7 @@ func TestResourceDeletedApplyFails(t *testing.T) {
 		deleteErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceDeleted(testResource)
+		c.ResourceDeleted(testResource())
 	})
 }
 
@@ -266,19 +280,27 @@ func TestResourceDeletedTemplatingFails(t *testing.T) {
 		deleteErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceDeleted(testResource)
+		c.ResourceDeleted(testResource())
 	})
 }
 
 func TestResourceUpdatedHappyPath(t *testing.T) {
 	dir := createTestDir(testTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource updated: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 
 	mockKube.EXPECT().Apply(gomock.Any())
 
@@ -287,19 +309,27 @@ func TestResourceUpdatedHappyPath(t *testing.T) {
 		update: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceUpdated(testResource, testResource)
+		c.ResourceUpdated(testResource(), testResource())
 	})
 }
 
 func TestResourceUpdatedApplyFails(t *testing.T) {
 	dir := createTestDir(testTemplates)
-	// Clean up after the test; another quirk of running as an example.
-	defer os.RemoveAll(dir)
-	c := tmplctlr.NewController(dir, "", nil, nil)
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockKube := NewMockKubeClient(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	// Clean up after the test; another quirk of running as an example.
+	defer os.RemoveAll(dir)
+	c := tmplctlr.NewController(dir, "", nil, mockResourceClient)
 	c.Client = mockKube
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource updated: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 
 	mockKube.EXPECT().Apply(gomock.Any()).Return("", errors.New("apply failed"))
 
@@ -308,6 +338,31 @@ func TestResourceUpdatedApplyFails(t *testing.T) {
 		updateErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		c.ResourceUpdated(testResource, testResource)
+		c.ResourceUpdated(testResource(), testResource())
 	})
+}
+
+func testStatusRaw(phase crw.ResourcePhase, reason crw.ConditionReason, message string) map[string]interface{} {
+	return map[string]interface{}{
+		"phase": phase,
+		"reason": reason,
+		"message": message,
+		"lastUpdateTime": metav1.Now().UTC(),
+		"lastTransitionTime": metav1.Now().UTC(),
+	}
+}
+
+func testResource() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name": "dory",
+			},
+			"spec": map[string]interface{}{
+				"Name": "Dory",
+				"From": "Finding Nemo",
+				"By":   "Disney",
+			},
+		},
+	}
 }

@@ -26,24 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/helm/pkg/proto/hapi/release"
 	"k8s.io/helm/pkg/proto/hapi/services"
+	k8sMock "github.com/wpengine/lostromos/mock/client-go/dynamic"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	crw "github.com/wpengine/lostromos/crwatcher"
 )
 
-var (
-	testController  = helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, nil, nil)
-	testReleaseName = "lostromostest-dory"
-	testResource    = &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"metadata": map[string]interface{}{
-				"name": "dory",
-			},
-			"spec": map[string]interface{}{
-				"Name": "Dory",
-				"From": "Finding Nemo",
-				"By":   "Disney",
-			},
-		},
-	}
-)
+const testReleaseName = "lostromostest-dory"
 
 func getPromCounterValue(metric string) float64 {
 	mf, _ := prometheus.DefaultGatherer.Gather()
@@ -123,11 +111,20 @@ func TestResourceAddedHappyPath(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(&services.ListReleasesResponse{}, nil)
 	installOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().InstallRelease(testController.ChartDir, testController.Namespace, installOpts...)
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = testStatus(crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = testStatus(crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 
 	ct := counterTest{
 		events:   1,
@@ -135,7 +132,7 @@ func TestResourceAddedHappyPath(t *testing.T) {
 		releases: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceAdded(testResource)
+		testController.ResourceAdded(testResource())
 	})
 }
 
@@ -144,6 +141,8 @@ func TestResourceAddedHappyPathExists(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	res := &services.ListReleasesResponse{
@@ -155,13 +154,21 @@ func TestResourceAddedHappyPathExists(t *testing.T) {
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(res, nil)
 	opts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().UpdateRelease(testReleaseName, testController.ChartDir, opts...)
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = testStatus(crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = testStatus(crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events:   1,
 		create:   1,
 		releases: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceAdded(testResource)
+		testController.ResourceAdded(testResource())
 	})
 }
 
@@ -170,11 +177,20 @@ func TestResourceAddedListErrorStillSuccessful(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(nil, errors.New("Broken"))
 	installOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().InstallRelease(testController.ChartDir, testController.Namespace, installOpts...)
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
 
 	ct := counterTest{
 		events:   1,
@@ -182,7 +198,7 @@ func TestResourceAddedListErrorStillSuccessful(t *testing.T) {
 		releases: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceAdded(testResource)
+		testController.ResourceAdded(testResource())
 	})
 }
 
@@ -191,18 +207,27 @@ func TestResourceAddedInstallErrors(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(&services.ListReleasesResponse{}, nil)
 	installOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().InstallRelease(testController.ChartDir, testController.Namespace, installOpts...).Return(nil, errors.New("install failed"))
 
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceAdded, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events:    1,
 		createErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceAdded(testResource)
+		testController.ResourceAdded(testResource())
 	})
 }
 
@@ -211,6 +236,8 @@ func TestResourceAddedUpdateErrors(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	res := &services.ListReleasesResponse{
@@ -222,12 +249,20 @@ func TestResourceAddedUpdateErrors(t *testing.T) {
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(res, nil)
 	opts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().UpdateRelease(testReleaseName, testController.ChartDir, opts...).Return(nil, errors.New("install failed"))
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource updated: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events:    1,
 		createErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceAdded(testResource)
+		testController.ResourceAdded(testResource())
 	})
 }
 
@@ -235,6 +270,8 @@ func TestResourceDeleted(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	deleteOpts := []interface{}{gomock.Any()}
 	mockHelm.EXPECT().DeleteRelease(testReleaseName, deleteOpts...)
@@ -246,7 +283,7 @@ func TestResourceDeleted(t *testing.T) {
 	}
 
 	assertCounters(t, ct, func() {
-		testController.ResourceDeleted(testResource)
+		testController.ResourceDeleted(testResource())
 	})
 }
 
@@ -254,15 +291,18 @@ func TestResourceDeletedWhenDeleteFails(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	deleteOpts := []interface{}{gomock.Any()}
 	mockHelm.EXPECT().DeleteRelease(testReleaseName, deleteOpts...).Return(nil, errors.New("delete failed"))
+	
 	ct := counterTest{
 		events:    1,
 		deleteErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceDeleted(testResource)
+		testController.ResourceDeleted(testResource())
 	})
 }
 
@@ -270,18 +310,27 @@ func TestResourceUpdatedHappyPath(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(&services.ListReleasesResponse{}, nil)
 	installOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().InstallRelease(testController.ChartDir, testController.Namespace, installOpts...)
 
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource updated: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events: 1,
 		update: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceUpdated(testResource, testResource)
+		testController.ResourceUpdated(testResource(), testResource())
 	})
 }
 
@@ -290,6 +339,8 @@ func TestResourceUpdatedHappyPathExists(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	res := &services.ListReleasesResponse{
@@ -301,12 +352,20 @@ func TestResourceUpdatedHappyPathExists(t *testing.T) {
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(res, nil)
 	opts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().UpdateRelease(testReleaseName, testController.ChartDir, opts...)
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events: 1,
 		update: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceUpdated(testResource, testResource)
+		testController.ResourceUpdated(testResource(), testResource())
 	})
 }
 
@@ -315,18 +374,27 @@ func TestResourceUpdatedListErrorStillSuccessful(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(nil, errors.New("Broken"))
 	installOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().InstallRelease(testController.ChartDir, testController.Namespace, installOpts...)
 
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplied, crw.ReasonApplySuccessful, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events: 1,
 		update: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceUpdated(testResource, testResource)
+		testController.ResourceUpdated(testResource(), testResource())
 	})
 }
 
@@ -335,18 +403,27 @@ func TestResourceUpdatedInstallErrors(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(&services.ListReleasesResponse{}, nil)
 	installOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().InstallRelease(testController.ChartDir, testController.Namespace, installOpts...).Return(nil, errors.New("install failed"))
 
+	expectedResource := testResource()
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = crw.SetPhase(crw.CustomResourceStatus{}, crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events:    1,
 		updateErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceUpdated(testResource, testResource)
+		testController.ResourceUpdated(testResource(), testResource())
 	})
 }
 
@@ -355,6 +432,8 @@ func TestResourceUpdatedUpdateErrors(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
 	mockHelm := NewMockInterface(mockCtrl)
+	mockResourceClient := k8sMock.NewMockResourceInterface(mockCtrl)
+	testController := helmctlr.NewController("../test/data/chart", "lostromos-test", "lostromostest", "0", false, 30, nil, mockResourceClient, nil)
 	testController.Helm = mockHelm
 	listOpts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	res := &services.ListReleasesResponse{
@@ -366,11 +445,54 @@ func TestResourceUpdatedUpdateErrors(t *testing.T) {
 	mockHelm.EXPECT().ListReleases(listOpts...).Return(res, nil)
 	opts := []interface{}{gomock.Any(), gomock.Any(), gomock.Any()}
 	mockHelm.EXPECT().UpdateRelease(testReleaseName, testController.ChartDir, opts...).Return(nil, errors.New("install failed"))
+
+	expectedResource := testResource()
+	expectedResource.Object["status"] = testStatusRaw(crw.PhaseApplying, crw.ReasonCustomResourceUpdated, "resource added: " + expectedResource.GetName())
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
+	expectedResource.Object["status"] = testStatusRaw(crw.PhaseFailed, crw.ReasonApplyFailed, "")
+	mockResourceClient.EXPECT().Update(crw.MatchStatus(crw.StatusFor(expectedResource)))
+
 	ct := counterTest{
 		events:    1,
 		updateErr: 1,
 	}
 	assertCounters(t, ct, func() {
-		testController.ResourceUpdated(testResource, testResource)
+		testController.ResourceUpdated(testResource(), testResource())
 	})
+}
+
+func testStatus(phase crw.ResourcePhase, reason crw.ConditionReason, message string) crw.CustomResourceStatus {
+	return crw.CustomResourceStatus{
+		Phase: phase,
+		Reason: reason,
+		Message: message,
+		LastUpdateTime: metav1.Now(),
+		LastTransitionTime: metav1.Now(),
+	}
+}
+
+func testStatusRaw(phase crw.ResourcePhase, reason crw.ConditionReason, message string) map[string]interface{} {
+	return map[string]interface{}{
+		"phase": phase,
+		"reason": reason,
+		"message": message,
+		"lastUpdateTime": metav1.Now().UTC(),
+		"lastTransitionTime": metav1.Now().UTC(),
+	}
+}
+
+func testResource() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name": "dory",
+			},
+			"spec": map[string]interface{}{
+				"Name": "Dory",
+				"From": "Finding Nemo",
+				"By":   "Disney",
+			},
+		},
+	}
 }

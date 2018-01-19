@@ -93,3 +93,12 @@ docker-build-test:
 	kubectl delete pod,service lostromos && sleep 60 || true
 	kubectl create -f test/data/deploy.yaml
 	kubectl expose pod lostromos --type=LoadBalancer
+
+mockgen:
+	@mkdir -p \
+		mock/client-go/dynamic
+	mockgen \
+		-source vendor/k8s.io/client-go/dynamic/client.go \
+		-destination mock/client-go/dynamic/resource_interface_mock.go \
+		-imports '.=k8s.io/client-go/dynamic' \
+		k8s.io/client-go/dynamic
