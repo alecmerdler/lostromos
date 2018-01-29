@@ -410,14 +410,10 @@
   revision = "0b12d6b5"
 
 [[projects]]
-  branch = "revert-55-output_tests"
   name = "github.com/json-iterator/go"
-  packages = [
-    ".",
-    "assert",
-    "require"
-  ]
-  revision = "787edc95b0efed27fc0722bcb5e11865dc6d1605"
+  packages = ["."]
+  revision = "28452fcdec4e44348d2af0d91d1e9e38da3a9e0a"
+  version = "1.0.5"
 
 [[projects]]
   name = "github.com/juju/ratelimit"
@@ -1307,6 +1303,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "da051debb451be1e38f4436e879ad55d7bdee1b1ba57ab945ecfc9a03c5b13dc"
+  inputs-digest = "b412e6bd69cf138883a9d03d92eb44ddf0eb440893506a31fce5e9a342e4f2fe"
   solver-name = "gps-cdcl"
   solver-version = 1
