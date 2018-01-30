@@ -15,25 +15,38 @@
 package helmctlr
 
 import (
+	"io/ioutil"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	crw "github.com/wpengine/lostromos/crwatcher"
 	"github.com/wpengine/lostromos/metrics"
+	k8sTesting "k8s.io/client-go/testing"
 
 	"os"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicFake "k8s.io/client-go/dynamic/fake"
 	k8sFake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/helm/pkg/chartutil"
 	"k8s.io/helm/pkg/tiller/environment"
 	internalFake "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 )
 
-var (
+const (
 	testNamespaceName = "lostromos-test"
 	testReleaseName   = "lostromostest-dory"
 )
+
+var mockResourceClient = &dynamicFake.FakeResourceClient{
+	Fake:      &k8sTesting.Fake{},
+	Resource:  schema.GroupVersionResource{},
+	Kind:      schema.GroupVersionKind{},
+	Namespace: testNamespaceName,
+}
 
 func newTestResource() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
@@ -54,10 +67,13 @@ func newTestResource() *unstructured.Unstructured {
 }
 
 func newTestController() *Controller {
+	file, _ := ioutil.TempFile(os.TempDir(), "lostromostest")
+	defer os.Remove(file.Name())
+
 	fakeK8sClient := k8sFake.NewSimpleClientset()
 	fakeInternalClient := internalFake.NewSimpleClientset()
-	ctlr := NewController("../test/data/helm/chart", testNamespaceName, "lostromostest", false, 30, nil, nil, fakeK8sClient, fakeInternalClient)
-	ctlr.tillerKubeClient = &environment.PrintingKubeClient{Out: os.Stdout}
+	ctlr := NewController("../test/data/helm/chart", testNamespaceName, "lostromostest", false, 30, nil, mockResourceClient, fakeK8sClient, fakeInternalClient)
+	ctlr.tillerKubeClient = &environment.PrintingKubeClient{Out: file}
 	chartutil.DefaultVersionSet = chartutil.NewVersionSet("v1", "extensions/v1beta1")
 	return ctlr
 }
@@ -145,6 +161,11 @@ func TestResourceAddedHappyPath(t *testing.T) {
 	}
 	assertCounters(t, ct, func() {
 		testController.ResourceAdded(newTestResource())
+
+		cr, err := mockResourceClient.Get(newTestResource().GetName(), v1.GetOptions{})
+		assert.NoError(t, err)
+		assert.Equal(t, crw.PhaseApplied, crw.StatusFor(cr).Phase)
+		assert.Equal(t, crw.ReasonApplySuccessful, crw.StatusFor(cr).Reason)
 	})
 }
 
@@ -156,6 +177,9 @@ func TestResourceAddedHappyPathExists(t *testing.T) {
 		create:   2,
 		releases: 2,
 	}
+
+	// TODO(alecmerdler): Test CR status updated
+
 	assertCounters(t, ct, func() {
 		testController.ResourceAdded(newTestResource())
 		testController.ResourceAdded(newTestResource())
@@ -172,6 +196,9 @@ func TestResourceAddedInstallErrors(t *testing.T) {
 		events:    1,
 		createErr: 1,
 	}
+
+	// TODO(alecmerdler): Test CR status updated
+
 	chartutil.DefaultVersionSet = chartutil.NewVersionSet("v1")
 	assertCounters(t, ct, func() {
 		testController.ResourceAdded(newTestResource())
@@ -209,6 +236,9 @@ func TestResourceUpdatedHappyPath(t *testing.T) {
 		events: 1,
 		update: 1,
 	}
+
+	// TODO(alecmerdler): Test CR status updated
+
 	assertCounters(t, ct, func() {
 		testController.ResourceUpdated(newTestResource(), newTestResource())
 	})
@@ -221,6 +251,9 @@ func TestResourceUpdatedHappyPathExists(t *testing.T) {
 		events: 2,
 		update: 2,
 	}
+
+	// TODO(alecmerdler): Test CR status updated
+
 	assertCounters(t, ct, func() {
 		testController.ResourceUpdated(newTestResource(), newTestResource())
 		testController.ResourceUpdated(newTestResource(), newTestResource())
@@ -235,6 +268,8 @@ func TestResourceUpdatedInstallErrors(t *testing.T) {
 		events:    1,
 		updateErr: 1,
 	}
+
+	// TODO(alecmerdler): Test CR status updated
 
 	assertCounters(t, ct, func() {
 		chartutil.DefaultVersionSet = chartutil.NewVersionSet("v1")
