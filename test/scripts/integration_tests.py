@@ -74,6 +74,171 @@ class Kubectl(object):
         """
         self.__run_command("delete", filepath, raise_error)
 
+
+class Helm(object):
+    """
+    Class used to interact with helm and return data
+    """
+
+    def delete(self, release_name):
+        """
+        Delete a named helm release
+        """
+        subprocess.call(
+            [
+                "helm",
+                "delete",
+                "--purge",
+                release_name
+            ]
+        )
+
+    def init(self):
+        """
+        Run a helm init for client only.
+        :return:
+        """
+        subprocess.check_call(
+            [
+                "helm",
+                "init",
+                "--client-only"
+            ]
+        )
+
+    def status(self, release_name):
+        """
+        Return the output of helm status
+        :param release_name: The name of the release to get
+        :return: The output of command as bytes
+        """
+        try:
+            output = subprocess.check_output(
+                [
+                    "helm",
+                    "status",
+                    release_name
+                ]
+            )
+            return output
+        except subprocess.CalledProcessError as error:
+            return error.output
+
+
+class HelmIntegrationTest(TestCase):
+    """
+    Class used to perform Lostromos integration testing with helm against a minikube environment. Uses kubectl to
+    manipulate the kubernetes system and helm to interact with helm.
+    """
+
+    def setUp(self):
+        """
+        Ensure the custom resource definition exists, and set up Helm.
+        """
+
+        self.__kubectl = Kubectl()
+        self.__helm = Helm()
+        self.__helm.init()
+        self.__minikube_ip = subprocess.check_output(["minikube", "ip"]).strip().decode('utf-8')
+
+        # Ensure the CRD is there and there are no characters, for a clean starting point
+        self.__kubectl.apply(_CUSTOM_RESOURCE_DEFINION_FILE)
+        self.__kubectl.delete(_THINGS_CUSTOM_RESOURCE_FILE)
+        self.__kubectl.delete(_THINGS_FILTERED_CUSTOM_RESOURCE_FILE)
+        self.__kubectl.delete(_THINGS_FILTERED_UPDATE_CUSTOM_RESOURCE_FILE)
+        self.__kubectl.delete(_NEMO_CUSTOM_RESOURCE_FILE)
+        self.__kubectl.delete(_NEMO_UPDATE_CUSTOM_RESOURCE_FILE)
+        self.__lostromos_process = None
+        self.__status_url = "http://localhost:8080/status"
+        self.__metrics_url = "http://localhost:8080/metrics"
+
+    def runTest(self):
+        """
+        Run test using Lostromos with a helm controller.
+        """
+        print("Starting Lostromos with helm controller")
+        self.__lostromos_process = subprocess.Popen(
+            [
+                _LOSTROMOS_EXE,
+                "start",
+                "--config",
+                _TEST_DATA_DIRECTORY + "/helm/config.yaml",
+                self.__minikube_ip + ":32664",
+            ],
+        )
+        print("Started Lostromos with PID: {}".format(self.__lostromos_process.pid))
+        
+        self.__wait_for_lostromos_start()
+        self.__kubectl.apply(_THINGS_CUSTOM_RESOURCE_FILE)
+        # self.__check_metrics(2, 2, 2, 0, 0)
+        # self.__kubectl.apply(_NEMO_CUSTOM_RESOURCE_FILE)
+        # self.__check_metrics(3, 3, 3, 0, 0)
+        # self.__kubectl.apply(_NEMO_UPDATE_CUSTOM_RESOURCE_FILE)
+        # self.__check_metrics(4, 3, 3, 0, 1)
+        # self.__kubectl.delete(_THINGS_CUSTOM_RESOURCE_FILE, True)
+        # self.__check_metrics(6, 1, 3, 2, 1)
+        # self.__kubectl.delete(_NEMO_CUSTOM_RESOURCE_FILE, True)
+        # self.__check_metrics(7, 0, 3, 3, 1)
+
+    def __check_metrics(self, events, managed, created, deleted, updated):
+        """
+        Check the metrics output to ensure that what we are expecting has occurred. Will wait up to 10 seconds looking
+        for the expected amount of events to have occurred. If the events haven't occurred, then an assertionError will
+        be raised. If the events occurred, we will check the stats for the managed/created/deleted/updated resources.
+        :param events: Number of events we are expecting to have happened.
+        :param managed: Number of resources we expect Lostromos to be managing.
+        :param created: Number of resources we expect Lostromos to have created.
+        :param deleted: Number of resources we expect Lostromos to have deleted.
+        :param updated: Number of resources we expect Lostromos to have updated.
+        """
+        metrics = []
+        attempts = 10
+        while attempts > 0:
+            metrics_response = requests.get(self.__metrics_url)
+            metrics_response.raise_for_status()
+            metrics = metrics_response.text.split("\n")
+            if "releases_events_total {}".format(events) not in metrics:
+                sleep(1)
+                attempts -= 1
+            else:
+                self.assertIn("releases_total {}".format(managed), metrics)
+                self.assertIn("releases_create_total {}".format(created), metrics)
+                self.assertIn("releases_delete_total {}".format(deleted), metrics)
+                self.assertIn("releases_update_total {}".format(updated), metrics)
+                return
+
+        raise AssertionError("Failed to see the expected number of events. {}".format(metrics))
+
+    def __wait_for_lostromos_start(self):
+        """
+        Wait for Lostromos to start up, then return.
+        """
+        # 15 seconds is probably more than we need, but the main use of these tests will be to run in TravisCI, and
+        # since we don't control that infrastructure it makes sense to inflate the value a bit. An extra 10 seconds
+        # should cause no harm, but help out in cases where the Travis servers are overwhelmed.
+        seconds_to_wait = 15
+        seconds_to_sleep = 1
+        while seconds_to_wait > 0:
+            try:
+                status_response = requests.get(self.__status_url)
+                status_response.raise_for_status()
+                self.assertTrue(status_response.json()["success"])
+            except requests.exceptions.ConnectionError:
+                sleep(seconds_to_sleep)
+                seconds_to_wait -= seconds_to_sleep
+            return
+        raise AssertionError("Failed to start Lostromos.")
+
+    def tearDown(self):
+        """
+        Kill the lostromos process if it was created.
+        """
+        self.__kubectl.delete(_CUSTOM_RESOURCE_DEFINION_FILE)
+        self.__helm.delete("lostromos-nemo")
+        if self.__lostromos_process:
+            self.__lostromos_process.send_signal(signal.SIGINT)
+
+
 class TemplateIntegrationTestWithFiltering(TestCase):
     """
     Class used to perform Lostromos integration testing against a minikube environment. Uses kubectl to manipulate the

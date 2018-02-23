@@ -1,24 +1,24 @@
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
-  name: {{ .Values.resource.name }}-hello
+  name: cool-hello
   labels:
-    app: {{ .Values.resource.name }}-hello
-    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
-    release: {{ .Release.Name }}
-    heritage: {{ .Release.Service }}
+    app: cool-hello
+    chart: cool-chart-v1.0.0
+    release: alpha
+    heritage: alpha
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: 1
   template:
     metadata:
       labels:
-        resource: {{ .Values.resource.name }}
+        resource: cool
         component: hello
-        By: {{ .Values.resource.spec.By }}
+        By: bananas
     spec:
       containers:
       - name: hello
-        image: {{ .Values.image }}
+        image: nginx
         resources:
           requests:
             cpu: "10m"

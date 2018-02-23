@@ -183,6 +183,9 @@ func (c Controller) installOrUpdate(r *unstructured.Unstructured) error {
 			Wait:      c.Wait,
 			Timeout:   c.WaitTimeout,
 		}
+		// FIXME(alecmerdler): Debugging integration tests
+		c.logger.Debug(installReq.Values)
+
 		releaseResponse, installErr := tiller.InstallRelease(context.TODO(), installReq)
 		if installErr != nil {
 			return installErr
