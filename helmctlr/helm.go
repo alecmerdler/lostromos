@@ -100,7 +100,7 @@ func (c Controller) ResourceAdded(r *unstructured.Unstructured) {
 	c.updateCRStatus(r, crw.PhaseApplied, crw.ReasonApplySuccessful, "")
 }
 
-// ResourceDeleted is called when a custom resource is created and will use
+// ResourceDeleted is called when a custom resource is deleted and will use
 // Helm to delete the release. The release is also purged in case in the future
 // another CR with the same name is created.
 func (c Controller) ResourceDeleted(r *unstructured.Unstructured) {

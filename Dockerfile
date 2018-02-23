@@ -12,7 +12,8 @@ WORKDIR /go/src/github.com/wpengine/lostromos
 COPY .  /go/src/github.com/wpengine/lostromos
 
 # Install any compile-time golang dependencies.
-RUN dep ensure
+# FIXME(alecmerdler): Uncomment this
+# RUN dep ensure
 RUN make out/lostromos-linux-amd64
 
 FROM alpine:latest

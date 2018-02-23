@@ -24,6 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/wpengine/lostromos/ansiblectlr"
 	"github.com/wpengine/lostromos/crwatcher"
 	"github.com/wpengine/lostromos/helmctlr"
 	"github.com/wpengine/lostromos/printctlr"
@@ -71,6 +72,9 @@ func init() {
 	startCmd.Flags().String("status-endpoint", "/status", "The URI for the status endpoint")
 	startCmd.Flags().String("templates", "", "absolute path to the directory with your template files")
 
+	// Ansible flags
+	startCmd.Flags().String("apb-dir", "", "Path to APB directory")
+
 	viperBindFlag("crd.name", startCmd.Flags().Lookup("crd-name"))
 	viperBindFlag("crd.group", startCmd.Flags().Lookup("crd-group"))
 	viperBindFlag("crd.version", startCmd.Flags().Lookup("crd-version"))
@@ -87,6 +91,9 @@ func init() {
 	viperBindFlag("server.metricsEndpoint", startCmd.Flags().Lookup("metrics-endpoint"))
 	viperBindFlag("server.statusEndpoint", startCmd.Flags().Lookup("status-endpoint"))
 	viperBindFlag("templates", startCmd.Flags().Lookup("templates"))
+
+	// Ansible flags
+	viperBindFlag("ansible.apbDir", startCmd.Flags().Lookup("apb-dir"))
 }
 
 func homeDir() string {
@@ -173,6 +180,13 @@ func getController(resourceClient dynamic.ResourceInterface, k8sClient kubernete
 			"helmWaitTimeout", hwto,
 		)
 		return helmctlr.NewController(chrt, hns, hrn, hw, hwto, logger, resourceClient, k8sClient, internalClient)
+	}
+	if viper.GetString("ansible.apbDir") != "" {
+		apbDir := viper.GetString("ansible.apbDir")
+		logger.Infow("using Ansible controller for deployment",
+			"apbDir", apbDir,
+		)
+		return ansiblectlr.NewController(apbDir, resourceClient, logger)
 	}
 	logger = logger.With("controller", "template")
 	logger.Infow("using template controller for deployment", "templateDir", viper.GetString("templates"))

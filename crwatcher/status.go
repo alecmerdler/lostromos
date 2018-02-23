@@ -43,12 +43,14 @@ const (
 )
 
 type CustomResourceStatus struct {
-	Release            *release.Release `json:"release"`
+	Release            *release.Release `json:"release,omitempty"`
 	Phase              ResourcePhase    `json:"phase"`
 	Reason             ConditionReason  `json:"reason,omitempty"`
 	Message            string           `json:"message,omitempty"`
 	LastUpdateTime     metav1.Time      `json:"lastUpdateTime,omitempty"`
 	LastTransitionTime metav1.Time      `json:"lastTransitionTime,omitempty"`
+
+	PodStatuses map[string][]string `json:"members,omitempty"`
 }
 
 func (s *CustomResourceStatus) ToMap() (map[string]interface{}, error) {
@@ -70,6 +72,12 @@ func (s *CustomResourceStatus) SetPhase(phase ResourcePhase, reason ConditionRea
 	}
 	s.Message = message
 	s.Reason = reason
+	return s
+}
+
+func (s *CustomResourceStatus) SetPodStatuses(podStatuses map[string][]string) *CustomResourceStatus {
+	s.LastUpdateTime = metav1.Now()
+	s.PodStatuses = podStatuses
 	return s
 }
 
